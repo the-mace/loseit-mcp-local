@@ -11,10 +11,12 @@ their site.
 ## Dependency updates
 
 Dependabot opens weekly PRs for Python packages and GitHub Actions, plus
-security updates as they appear. A workflow auto-approves and squash-merges
-those PRs so routine fixes land without manual review. Re-run
-`pip install -r requirements.txt` (and `playwright install chromium` after
-Playwright bumps) on machines that already have a checkout.
+security updates as they appear. CI runs the unit tests on every PR (including
+Dependabot’s). When that CI run succeeds, a separate workflow auto-approves
+and squash-merges Dependabot PRs — so broken bumps never merge, and tests
+are only defined in one place. Re-run `pip install -r requirements.txt` (and
+`playwright install chromium` after Playwright bumps) on machines that
+already have a checkout.
 
 ## Privacy note
 

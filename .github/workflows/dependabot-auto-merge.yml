@@ -1,45 +1,66 @@
-# Auto-approve and merge Dependabot PRs (patch, minor, major, and security).
-# Requires: repo setting "Allow auto-merge" (enabled) and no blocking
-# branch-protection rules that the default GITHUB_TOKEN cannot satisfy.
+# After CI passes on a Dependabot PR, approve and squash-merge it.
+# Tests live only in ci.yml — this workflow does not re-run them.
+#
+# Requires: repo setting "Allow auto-merge" is optional here (we merge
+# directly once CI has already succeeded via workflow_run).
 name: Dependabot auto-merge
 
 on:
-  pull_request:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 permissions:
   contents: write
   pull-requests: write
+  actions: read
 
 jobs:
   dependabot:
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    # Only act on successful CI runs that were triggered by a pull_request.
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
     steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v2
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Find Dependabot PR for this commit
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # commits/{sha}/pulls needs the pull-requests media type / Accept
+          # header; gh api sets that when querying this endpoint.
+          pr_json=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.user.login == "dependabot[bot]")] | .[0] // empty')
+          if [ -z "$pr_json" ]; then
+            echo "No Dependabot PR for ${SHA}; nothing to merge."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          number=$(printf '%s' "$pr_json" | jq -r .number)
+          url=$(printf '%s' "$pr_json" | jq -r .html_url)
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "Dependabot PR #${number}: ${url}"
 
       - name: Approve PR
+        if: steps.pr.outputs.skip != 'true'
         run: gh pr review --approve "$PR_URL"
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge (squash)
+      - name: Squash-merge
+        if: steps.pr.outputs.skip != 'true'
         run: |
-          # Prefer auto-merge so any future required checks can complete first.
-          # If the repo has no required checks, fall back to an immediate squash
-          # merge so updates still land without manual intervention.
-          if ! gh pr merge --auto --squash "$PR_URL"; then
-            echo "auto-merge not available or already set; trying direct squash merge"
-            gh pr merge --squash "$PR_URL" || {
-              echo "Could not merge yet (checks pending or branch protection)."
-              echo "Auto-merge may still apply when checks pass."
-              exit 0
-            }
+          # CI already passed (this job only runs on workflow_run success).
+          if ! gh pr merge --squash "$PR_URL"; then
+            echo "Could not merge (already merged, conflict, or branch protection)."
+            exit 0
           fi
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
