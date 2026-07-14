@@ -1,0 +1,34 @@
+# Dependabot version updates + grouping.
+# Security updates are enabled at the repo level (automated-security-fixes).
+# PRs are auto-merged by .github/workflows/dependabot-auto-merge.yml.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    # Keep Python deps in one PR when possible so the bot can ship faster.
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Still open individual PRs for major bumps (higher risk).
+    # Those are also auto-merged by the workflow if you want maximum automation.
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    rebase-strategy: "auto"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

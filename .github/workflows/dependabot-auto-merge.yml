@@ -1,0 +1,45 @@
+# Auto-approve and merge Dependabot PRs (patch, minor, major, and security).
+# Requires: repo setting "Allow auto-merge" (enabled) and no blocking
+# branch-protection rules that the default GITHUB_TOKEN cannot satisfy.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Approve PR
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge (squash)
+        run: |
+          # Prefer auto-merge so any future required checks can complete first.
+          # If the repo has no required checks, fall back to an immediate squash
+          # merge so updates still land without manual intervention.
+          if ! gh pr merge --auto --squash "$PR_URL"; then
+            echo "auto-merge not available or already set; trying direct squash merge"
+            gh pr merge --squash "$PR_URL" || {
+              echo "Could not merge yet (checks pending or branch protection)."
+              echo "Auto-merge may still apply when checks pass."
+              exit 0
+            }
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

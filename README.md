@@ -8,6 +8,14 @@ their site.
 
 **License:** MIT (see [LICENSE](LICENSE)).
 
+## Dependency updates
+
+Dependabot opens weekly PRs for Python packages and GitHub Actions, plus
+security updates as they appear. A workflow auto-approves and squash-merges
+those PRs so routine fixes land without manual review. Re-run
+`pip install -r requirements.txt` (and `playwright install chromium` after
+Playwright bumps) on machines that already have a checkout.
+
 ## Privacy note
 
 Session cookies, SQLite food/weight history, and logs live under
