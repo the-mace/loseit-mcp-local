@@ -1,0 +1,29 @@
+# Python / local env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+.env
+.env.*
+
+# Local AI / editor tooling
+.claude/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Runtime data must never ship (session cookies, health PII, logs)
+.loseit-data/
+*.db
+*.db-journal
+*.db.bak*
+state.json
+*.log
+last_success
+last_stale_alert
+
+# Installed launchd agents belong in ~/Library/LaunchAgents only.
+# Ignore accidental copies dropped in the repo root.
+/com.*.plist
