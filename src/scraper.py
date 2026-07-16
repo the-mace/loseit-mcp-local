@@ -17,11 +17,11 @@ whose text is exactly "Budget", read its sibling). This is more robust to
 a re-deploy than hardcoded hash classes, but is still DOM-shape-dependent
 -- expect it to need touch-ups eventually.
 
-Scope: food log, body weight, and water intake. Individual exercise entries are
-intentionally not scraped (out of scope per requirements) even though the
-daily log page includes them -- the one exception is the day's aggregate
-"Exercise" calories-burned total from the summary row, captured only so
-calories_remaining_after_exercise can match LoseIt's own over/under-budget
+Scope: food log, daily notes, body weight, and water intake. Individual
+exercise entries are intentionally not scraped (out of scope per requirements)
+even though the daily log page includes them -- the one exception is the day's
+aggregate "Exercise" calories-burned total from the summary row, captured only
+so calories_remaining_after_exercise can match LoseIt's own over/under-budget
 figure, which nets out exercise credit.
 
 Run modes:
@@ -259,10 +259,74 @@ def _meal_food_items(page):
     )
 
 
+def _day_notes(page):
+    """Return the day's journal note text from the Notes section of the log,
+    or None if empty / not present.
+
+    Observed DOM (GWT day log): a section header "Notes", then one or more
+    rows with an `a.gwt-Anchor` whose text is exactly "Note" and a sibling
+    div holding the body (e.g. "Mom visiting before cruise"). Multiple note
+    bodies are joined with newlines. Keys off the stable "Note" anchor text
+    rather than obfuscated GWT class hashes.
+    """
+    return page.evaluate(
+        """() => {
+            const norm = s => (s || '').replace(/[\\s\\u00a0]+/g, ' ').trim();
+            const isHidden = e => {
+                let node = e;
+                while (node && node.nodeType === 1) {
+                    const cs = getComputedStyle(node);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+                    node = node.parentElement;
+                }
+                return false;
+            };
+
+            // Prefer a Notes section container so a food literally named
+            // "Note" elsewhere on the page can't be mis-read as a journal entry.
+            let header = null;
+            for (const el of document.querySelectorAll('div,td,span')) {
+                if (norm(el.textContent) !== 'Notes') continue;
+                if (Array.from(el.children).some(c => norm(c.textContent) === 'Notes')) continue;
+                if (isHidden(el)) continue;
+                header = el;
+                break;
+            }
+            if (!header) return null;
+
+            // The "Notes" header sits several levels above the Note row
+            // (header table -> outer tbody that also holds the Note anchor).
+            // Keep climbing until we find Note anchors, or until we've
+            // spilled into the full meal log without any -- empty Notes.
+            let container = header;
+            for (let depth = 0; depth < 16 && container; depth++) {
+                const noteAnchors = Array.from(container.querySelectorAll('a.gwt-Anchor'))
+                    .filter(a => norm(a.textContent) === 'Note' && !isHidden(a));
+                if (noteAnchors.length) {
+                    const bodies = noteAnchors.map(a => {
+                        if (a.nextElementSibling) return norm(a.nextElementSibling.textContent);
+                        // Fallback: parent text minus the "Note" label.
+                        const parent = a.parentElement;
+                        if (!parent) return '';
+                        return norm(parent.textContent).replace(/^Note\\s*/, '');
+                    }).filter(Boolean);
+                    return bodies.length ? bodies.join('\\n') : null;
+                }
+                const t = norm(container.textContent);
+                if (t.includes('Breakfast') && t.includes('Lunch') && t.includes('Dinner')) {
+                    return null;
+                }
+                container = container.parentElement;
+            }
+            return null;
+        }"""
+    )
+
+
 def fetch_day(page, day: date):
-    """Scrape the daily calorie budget/eaten totals, macro totals, and the
-    individual food log entries for `day` off the LoseIt dashboard (which
-    doubles as the per-day log view once navigated to that date)."""
+    """Scrape the daily calorie budget/eaten totals, macro totals, daily notes,
+    and the individual food log entries for `day` off the LoseIt dashboard
+    (which doubles as the per-day log view once navigated to that date)."""
     _goto_date(page, day)
 
     calorie_budget = _parse_number(_summary_value(page, "Budget") or "0")
@@ -275,6 +339,8 @@ def fetch_day(page, day: date):
     # the running total); we store the positive burned magnitude instead
     # so the column name matches its sign.
     exercise_calories_burned = abs(_parse_number(_summary_value(page, "Exercise") or "0"))
+
+    notes = _day_notes(page)
 
     _click_tab(page, "My Nutrients")
     page.wait_for_timeout(500)
@@ -292,6 +358,7 @@ def fetch_day(page, day: date):
         "protein_g": protein_g,
         "carbs_g": carbs_g,
         "fat_g": fat_g,
+        "notes": notes,
     })
 
     for item in _meal_food_items(page):
@@ -332,7 +399,17 @@ def fetch_weight(page, day: date):
     _goto_date(page, day)
     value = page.evaluate(
         """() => {
-            const el = document.querySelector('input.gwt-TextBox[disabled]');
+            // LoseIt uses two shapes for the weight widget:
+            // - a disabled gwt-TextBox on some past days / empty states
+            // - an editable `gwt-TextBox GPOEIKGBUC` once a weight is logged
+            //   (same class family as the water input; safe here because we
+            //   are on the Weight tab after the nav dance above)
+            const disabled = document.querySelector('input.gwt-TextBox[disabled]');
+            if (disabled && disabled.value.trim()) return disabled.value.trim();
+            const inputs = Array.from(document.querySelectorAll('input.gwt-TextBox'));
+            const el = inputs.find(
+                i => i.className.trim() === 'gwt-TextBox GPOEIKGBUC' && !i.disabled
+            );
             return el ? el.value.trim() : '';
         }"""
     )

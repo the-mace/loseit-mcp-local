@@ -19,7 +19,7 @@ def _default_range(days: int):
 
 @mcp.tool()
 def get_daily_summary(start_date: str = None, end_date: str = None, days: int = 7) -> list[dict]:
-    """Get daily calorie budget/eaten/remaining and macro totals.
+    """Get daily calorie budget/eaten/remaining, macro totals, and journal notes.
 
     Args:
         start_date: YYYY-MM-DD, optional

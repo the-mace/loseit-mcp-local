@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS daily_summary (
     protein_g REAL,
     carbs_g REAL,
     fat_g REAL,
+    notes TEXT,
     fetched_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -54,10 +55,18 @@ CREATE TABLE IF NOT EXISTS water_log (
 """
 
 
+def _migrate(conn: sqlite3.Connection):
+    """Apply additive schema changes for DBs created before newer columns."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_summary)")}
+    if cols and "notes" not in cols:
+        conn.execute("ALTER TABLE daily_summary ADD COLUMN notes TEXT")
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager
@@ -73,15 +82,17 @@ def get_conn():
 
 
 def upsert_daily_summary(row: dict):
+    # Default notes to None so older call sites / partial dicts still work.
+    row = {"notes": None, **row}
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO daily_summary
                (date, calorie_budget, calories_eaten, exercise_calories_burned,
                 calories_remaining_before_exercise, calories_remaining_after_exercise,
-                protein_g, carbs_g, fat_g)
+                protein_g, carbs_g, fat_g, notes)
                VALUES (:date, :calorie_budget, :calories_eaten, :exercise_calories_burned,
                        :calories_remaining_before_exercise, :calories_remaining_after_exercise,
-                       :protein_g, :carbs_g, :fat_g)
+                       :protein_g, :carbs_g, :fat_g, :notes)
                ON CONFLICT(date) DO UPDATE SET
                  calorie_budget=excluded.calorie_budget,
                  calories_eaten=excluded.calories_eaten,
@@ -91,6 +102,7 @@ def upsert_daily_summary(row: dict):
                  protein_g=excluded.protein_g,
                  carbs_g=excluded.carbs_g,
                  fat_g=excluded.fat_g,
+                 notes=excluded.notes,
                  fetched_at=datetime('now')
             """,
             row,

@@ -13,6 +13,7 @@ def _summary(date, **overrides):
         "protein_g": 100.0,
         "carbs_g": 150.0,
         "fat_g": 50.0,
+        "notes": None,
     }
     row.update(overrides)
     return row
@@ -39,21 +40,76 @@ def _food(date="2026-07-10", meal="Breakfast", name="Eggs", **overrides):
 
 
 def test_upsert_daily_summary_inserts(tmp_db):
-    db.upsert_daily_summary(_summary("2026-07-10"))
+    db.upsert_daily_summary(_summary("2026-07-10", notes="Felt good"))
     rows = db.query_daily_summary("2026-07-10", "2026-07-10")
     assert len(rows) == 1
     assert rows[0]["calorie_budget"] == 2000.0
     assert rows[0]["calories_eaten"] == 1500.0
     assert rows[0]["protein_g"] == 100.0
+    assert rows[0]["notes"] == "Felt good"
 
 
 def test_upsert_daily_summary_overwrites_on_conflict(tmp_db):
-    db.upsert_daily_summary(_summary("2026-07-10", calories_eaten=1500.0))
-    db.upsert_daily_summary(_summary("2026-07-10", calories_eaten=1800.0, protein_g=120.0))
+    db.upsert_daily_summary(_summary("2026-07-10", calories_eaten=1500.0, notes="old"))
+    db.upsert_daily_summary(
+        _summary("2026-07-10", calories_eaten=1800.0, protein_g=120.0, notes="updated")
+    )
     rows = db.query_daily_summary("2026-07-10", "2026-07-10")
     assert len(rows) == 1
     assert rows[0]["calories_eaten"] == 1800.0
     assert rows[0]["protein_g"] == 120.0
+    assert rows[0]["notes"] == "updated"
+
+
+def test_upsert_daily_summary_notes_cleared_when_absent(tmp_db):
+    """Re-scrape with no note must clear a previously stored note."""
+    db.upsert_daily_summary(_summary("2026-07-10", notes="had a note"))
+    db.upsert_daily_summary(_summary("2026-07-10", notes=None))
+    rows = db.query_daily_summary("2026-07-10", "2026-07-10")
+    assert rows[0]["notes"] is None
+
+
+def test_upsert_daily_summary_notes_optional_key(tmp_db):
+    """Callers that omit notes entirely still insert successfully."""
+    row = _summary("2026-07-10")
+    del row["notes"]
+    db.upsert_daily_summary(row)
+    rows = db.query_daily_summary("2026-07-10", "2026-07-10")
+    assert rows[0]["notes"] is None
+
+
+def test_migrate_adds_notes_column_to_existing_db(tmp_path, monkeypatch):
+    """DBs created before the notes column still gain it via init_db()."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    monkeypatch.setattr(db, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """CREATE TABLE daily_summary (
+                date TEXT PRIMARY KEY,
+                calorie_budget REAL,
+                calories_eaten REAL,
+                exercise_calories_burned REAL,
+                calories_remaining_before_exercise REAL,
+                calories_remaining_after_exercise REAL,
+                protein_g REAL,
+                carbs_g REAL,
+                fat_g REAL,
+                fetched_at TEXT
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO daily_summary (date, calorie_budget) VALUES ('2026-07-10', 2000)"
+        )
+    db.init_db()
+    with sqlite3.connect(path) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_summary)")}
+        assert "notes" in cols
+        note = conn.execute(
+            "SELECT notes FROM daily_summary WHERE date = '2026-07-10'"
+        ).fetchone()[0]
+        assert note is None
 
 
 def test_query_daily_summary_date_range_and_order(tmp_db):
