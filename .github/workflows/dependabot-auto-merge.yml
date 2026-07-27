@@ -1,8 +1,12 @@
 # After CI passes on a Dependabot PR, approve and squash-merge it.
-# Tests live only in ci.yml — this workflow does not re-run them.
+# Human PRs are left alone — branch protection on main requires 1 review
+# for those. Only dependabot[bot] PRs are approved/merged here.
 #
-# Requires: repo setting "Allow auto-merge" is optional here (we merge
-# directly once CI has already succeeded via workflow_run).
+# Repo settings this relies on:
+# - Actions → Workflow permissions → "Allow GitHub Actions to create and
+#   approve pull requests" (can_approve_pull_request_reviews)
+# - Branch protection on main: 1 approving review + required check "test"
+# - Allow squash merge (we merge directly; "Allow auto-merge" is optional)
 name: Dependabot auto-merge
 
 on:
@@ -48,7 +52,13 @@ jobs:
 
       - name: Approve PR
         if: steps.pr.outputs.skip != 'true'
-        run: gh pr review --approve "$PR_URL"
+        run: |
+          # Satisfies branch protection's required review. GITHUB_TOKEN may
+          # approve because repo setting can_approve_pull_request_reviews is on.
+          if ! gh pr review --approve "$PR_URL"; then
+            echo "::error::Could not approve. Check Actions → Workflow permissions → Allow GitHub Actions to create and approve pull requests."
+            exit 1
+          fi
         env:
           PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,10 +67,19 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         run: |
           # CI already passed (this job only runs on workflow_run success).
-          if ! gh pr merge --squash "$PR_URL"; then
-            echo "Could not merge (already merged, conflict, or branch protection)."
+          # Immediate merge can fail when another PR landed first ("Base branch
+          # was modified" / branch behind). Fall back to GitHub auto-merge so
+          # it merges once the branch is up to date and checks re-pass.
+          if gh pr merge --squash --delete-branch "$PR_URL"; then
+            echo "Merged."
             exit 0
           fi
+          echo "Immediate merge failed; enabling auto-merge..."
+          if gh pr merge --squash --auto --delete-branch "$PR_URL"; then
+            echo "Auto-merge enabled."
+            exit 0
+          fi
+          echo "Could not merge or enable auto-merge (already merged, conflict, or protection)."
         env:
           PR_URL: ${{ steps.pr.outputs.url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
