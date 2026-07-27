@@ -1,5 +1,14 @@
 # LoseIt Local MCP — Build Brief
 
+## Before starting any work
+
+Dependabot may have auto-merged dependency/CI updates to `main`. **Always
+pull first** — see `AGENTS.md`. Quick path:
+
+```bash
+git checkout main && git pull --ff-only
+```
+
 ## Context
 
 I use LoseIt (loseit.com) for diet/calorie tracking. There's no official
