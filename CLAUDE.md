@@ -27,9 +27,9 @@ solving a CAPTCHA on every login).
 
 - `src/db.py` — SQLite schema + helpers (daily_summary, food_log,
   weight_log, exercise_log tables). Complete, should not need changes.
-- `src/loseit_mcp.py` — MCP server (FastMCP) exposing 4 read-only tools
-  over that SQLite data. Complete, should not need changes unless the
-  scraped schema needs to change.
+- `src/loseit_mcp.py` — MCP server (MCPServer / mcp v2) exposing 4
+  read-only tools over that SQLite data. Complete, should not need
+  changes unless the scraped schema needs to change.
 - `src/scraper.py` — Playwright scraper. **Login/session persistence is
   implemented and should work as-is.** The actual data-extraction
   functions (`fetch_day`, `fetch_weight`, `fetch_exercise`) are stubbed
