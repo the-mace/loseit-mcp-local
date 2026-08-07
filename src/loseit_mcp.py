@@ -5,10 +5,10 @@ has already stored in ~/.loseit-data/loseit.db. Run scraper.py on a
 schedule (see README.md for the launchd setup) to keep it fresh.
 """
 from datetime import date, timedelta
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import db
 
-mcp = FastMCP("loseit")
+mcp = MCPServer("loseit")
 
 
 def _default_range(days: int):
