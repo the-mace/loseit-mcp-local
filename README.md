@@ -85,9 +85,15 @@ Two launchd jobs (macOS):
 | `com.loseit-mcp.scraper` | 06:00 | Scrape via `scripts/run-scraper.sh`. On failure, emails you if configured. On success, writes `~/.loseit-data/last_success`. |
 | `com.loseit-mcp.scraper-health` | 12:00 | If `last_success` is older than 36h (or missing and DB is stale), emails a STALE alert (at most once per day) if configured. |
 
-Alerts use the local `mail` command and only send when
-`LOSEIT_ALERT_EMAIL` is set. Install the agents (paths are filled in from
-this checkout — nothing machine-specific is stored in the repo):
+Alerts send through local sendmail/postfix when `LOSEIT_ALERT_EMAIL` is
+set. Attempts are logged to `~/.loseit-data/logs/alert.log`. Test with:
+
+```bash
+LOSEIT_ALERT_EMAIL=you@example.com bash scripts/send-alert.sh --test
+```
+
+Install the agents (paths are filled in from this checkout — nothing
+machine-specific is stored in the repo):
 
 ```bash
 # recommended: pass your alert address at install time

@@ -9,6 +9,8 @@ MARKER="${DATA_DIR}/last_success"
 DB="${DATA_DIR}/loseit.db"
 STALE_ALERT_STAMP="${DATA_DIR}/last_stale_alert"
 ALERT_EMAIL="${LOSEIT_ALERT_EMAIL:-}"
+SCRIPT_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SEND_ALERT="${SCRIPT_SELF}/send-alert.sh"
 # 36h: covers a 06:00 run + next-day noon check, with headroom for sleep/travel.
 MAX_AGE_HOURS="${LOSEIT_STALE_HOURS:-36}"
 # When no success marker exists yet, treat DB max(date) older than this many
@@ -81,7 +83,7 @@ BODY=$(
 )
 
 if [[ -n "$ALERT_EMAIL" ]]; then
-  echo "$BODY" | mail -s "loseit-scraper STALE (no recent success)" "$ALERT_EMAIL" || true
+  echo "$BODY" | "$SEND_ALERT" "loseit-scraper STALE (no recent success)" || echo "WARNING: failed to send stale alert (see ${DATA_DIR}/logs/alert.log)" >&2
 else
   echo "WARNING: scrape appears stale; set LOSEIT_ALERT_EMAIL to enable email alerts" >&2
   echo "$BODY" >&2

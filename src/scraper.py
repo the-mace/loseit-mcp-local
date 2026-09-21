@@ -33,7 +33,9 @@ Run modes:
                                      (useful while you're still tuning selectors)
 """
 import argparse
+import json
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -42,6 +44,90 @@ import db
 
 STATE_PATH = Path.home() / ".loseit-data" / "state.json"
 LOSEIT_BASE = "https://www.loseit.com"
+# Auth cookies observed in a real storage_state. LoseIt has been issuing
+# these with a ~14-day expiry from login; they are not extended by later
+# scrapes. Once they expire, www.loseit.com renders the public marketing
+# page instead of the GWT day log.
+_AUTH_COOKIE_NAMES = frozenset({"fn_auth", "liauth", "fn_authed"})
+_DATE_HEADER_RE_JS = r"^[A-Za-z]+\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4}$"
+
+
+def _auth_session_expired(state_path: Path, now_ts: float | None = None) -> bool:
+    """True when saved auth cookies are missing or past their expiry.
+
+    Session cookies (expires -1/0/None) count as still valid: Playwright
+    will send them on the next launch. Unknown cookie names are ignored so
+    a LoseIt rename falls through to the live-page check instead.
+    """
+    now_ts = time.time() if now_ts is None else now_ts
+    try:
+        data = json.loads(state_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    cookies = [c for c in data.get("cookies", []) if c.get("name") in _AUTH_COOKIE_NAMES]
+    if not cookies:
+        return True
+    for c in cookies:
+        exp = c.get("expires")
+        if exp in (None, -1, 0):
+            return False
+        try:
+            if float(exp) > now_ts:
+                return False
+        except (TypeError, ValueError):
+            continue
+    return True
+
+
+def _page_state(page) -> str:
+    """Classify the current page: dashboard, login, marketing, or unknown."""
+    return page.evaluate(
+        """(pattern) => {
+            const url = location.href;
+            if (/\\/login/i.test(url)) return 'login';
+            const re = new RegExp(pattern);
+            const els = document.querySelectorAll('div,span');
+            for (const el of els) {
+                if (el.children.length === 0) {
+                    const t = el.textContent.replace(/\\u00a0/g, ' ').trim();
+                    if (re.test(t)) return 'dashboard';
+                }
+            }
+            if (document.querySelector('.prevArrowButton, .nextArrowButton')) {
+                return 'dashboard';
+            }
+            const text = document.body ? document.body.innerText : '';
+            if (/Sign Up for Free/i.test(text) && /Log In/i.test(text)) {
+                return 'marketing';
+            }
+            if (document.querySelector('input[type=password]')) return 'login';
+            return 'unknown';
+        }""",
+        _DATE_HEADER_RE_JS,
+    )
+
+
+def _await_dashboard(page, timeout_ms: int = 30000):
+    """Wait until the GWT day log is visible, or fail if we landed logged out."""
+    deadline = time.time() + timeout_ms / 1000
+    logged_out_hits = 0
+    last_state = "unknown"
+    while time.time() < deadline:
+        last_state = _page_state(page)
+        if last_state == "dashboard":
+            return
+        if last_state in ("login", "marketing"):
+            logged_out_hits += 1
+            # A couple of samples so a slow redirect isn't a false logout.
+            if logged_out_hits >= 4:
+                raise RuntimeError(
+                    "LoseIt session expired or is not logged in. "
+                    "Run `python src/scraper.py login` and try again."
+                )
+        page.wait_for_timeout(500)
+    raise RuntimeError(
+        f"Couldn't find the displayed date header on the page (last state: {last_state})."
+    )
 
 
 def do_login():
@@ -53,15 +139,22 @@ def do_login():
         context = browser.new_context()
         page = context.new_page()
         page.goto(f"{LOSEIT_BASE}/login")
-        print("Log in manually in the opened browser window.")
-        print("Once you're on your LoseIt home/dashboard page, come back here and press Enter.")
-        input()
+        print("Log in manually in the opened browser window (complete any CAPTCHA).")
+        print("If there is a 'remember me' / stay signed in option, turn it on.")
+        print("This will save the session once your daily log is visible — no need to press Enter.")
+        deadline = time.time() + 15 * 60
+        while time.time() < deadline:
+            if _page_state(page) == "dashboard":
+                break
+            page.wait_for_timeout(1000)
+        else:
+            raise RuntimeError(
+                "Timed out waiting for a logged-in LoseIt daily log. "
+                "Leave the log page visible and re-run `python src/scraper.py login`."
+            )
         context.storage_state(path=str(STATE_PATH))
         browser.close()
     print(f"Session saved to {STATE_PATH}")
-
-
-_DATE_HEADER_RE_JS = r"^[A-Za-z]+\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4}$"
 
 
 def _read_displayed_date(page) -> date:
@@ -87,30 +180,66 @@ def _read_displayed_date(page) -> date:
     return datetime.strptime(text, "%A %b %d, %Y").date()
 
 
+def _day_fingerprint(page) -> str:
+    """Cheap snapshot of the bound day log: summary Food value plus food names.
+
+    The date header updates before GWT rebinds Budget/Food and the meal
+    list. Waiting for this to change after a click avoids reading the
+    previous day's totals (Food showing '-' / 0 while the header already
+    says the new date).
+    """
+    return page.evaluate(
+        """() => {
+            const norm = s => (s || '').replace(/[\\s\\u00a0]+/g, ' ').trim();
+            let food = '';
+            const el = Array.from(document.querySelectorAll('div.gwt-HTML'))
+                .find(e => e.textContent.trim() === 'Food');
+            if (el && el.nextElementSibling) food = el.nextElementSibling.textContent.trim();
+            const names = Array.from(document.querySelectorAll('a.gwt-Anchor'))
+                .map(a => norm(a.textContent)).filter(Boolean).slice(0, 12);
+            return food + '|' + names.join(',');
+        }"""
+    )
+
+
 def _goto_date(page, target: date):
     """Click the prev/next day arrow enough times to reach `target`.
 
     LoseIt has no per-day URL (confirmed: /log/date/YYYY-MM-DD 404s), so
     navigation only happens through these in-page buttons. We verify by
-    re-reading the date header rather than assuming N clicks worked.
+    re-reading the date header after each click rather than assuming N
+    clicks worked — important on catch-up runs that may be tens of days.
+    After the header changes we also wait for the day's food/summary
+    data to rebind; the header otherwise wins the race.
     """
     current = _read_displayed_date(page)
-    delta = (target - current).days
-    if delta == 0:
+    if current == target:
         return
-    selector = ".nextArrowButton" if delta > 0 else ".prevArrowButton"
-    for _ in range(abs(delta)):
+    selector = ".nextArrowButton" if target > current else ".prevArrowButton"
+    steps = abs((target - current).days)
+    for _ in range(steps):
+        before = current
+        before_fp = _day_fingerprint(page)
         page.click(selector)
-        page.wait_for_timeout(400)
-
-    for _ in range(20):
-        if _read_displayed_date(page) == target:
-            return
-        page.wait_for_timeout(300)
-    raise RuntimeError(
-        f"Could not navigate to {target.isoformat()}; "
-        f"page still shows {_read_displayed_date(page).isoformat()}"
-    )
+        for _ in range(20):
+            current = _read_displayed_date(page)
+            if current != before:
+                break
+            page.wait_for_timeout(150)
+        else:
+            raise RuntimeError(
+                f"Date header did not change after clicking toward {target.isoformat()}; "
+                f"still {current.isoformat()}"
+            )
+        for _ in range(25):
+            if _day_fingerprint(page) != before_fp:
+                break
+            page.wait_for_timeout(100)
+    if current != target:
+        raise RuntimeError(
+            f"Could not navigate to {target.isoformat()}; "
+            f"page still shows {current.isoformat()}"
+        )
 
 
 def _parse_quantity(text: str):
@@ -446,19 +575,48 @@ def fetch_water(page, day: date):
         db.upsert_water(day.isoformat(), float(value))
 
 
+def resolve_since(since: str | None, today: date | None = None) -> date:
+    """Start date for a run: explicit --since, else last stored daily_summary
+    date (re-fetched in case it was edited), else 7 days before today.
+
+    A default run therefore catch-up-fills any gap from the last valid
+    fetch through yesterday, including after a stretch of failed jobs.
+    """
+    today = today or date.today()
+    if since:
+        return date.fromisoformat(since)
+    last = db.latest_date("daily_summary")
+    return date.fromisoformat(last) if last else (today - timedelta(days=7))
+
+
 def run(since: date, headed: bool):
     if not STATE_PATH.exists():
         print("No saved session found. Run `python scraper.py login` first.")
         sys.exit(1)
+    if _auth_session_expired(STATE_PATH):
+        print(
+            "Saved LoseIt auth cookies have expired. "
+            "Run `python src/scraper.py login` and then re-run."
+        )
+        sys.exit(1)
 
     db.init_db()
     today = date.today()
+    yesterday = today - timedelta(days=1)
+    if since > yesterday:
+        print(f"Nothing to fetch: since {since.isoformat()} is not before today.")
+        return
+    n_days = (yesterday - since).days + 1
+    print(
+        f"Catching up {n_days} day(s) from {since.isoformat()} through {yesterday.isoformat()}."
+    )
     d = since
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headed)
         context = browser.new_context(storage_state=str(STATE_PATH))
         page = context.new_page()
         page.goto(LOSEIT_BASE, wait_until="networkidle")
+        _await_dashboard(page)
 
         while d < today:
             print(f"Fetching {d.isoformat()}...")
@@ -485,14 +643,11 @@ if __name__ == "__main__":
     if args.cmd == "login":
         do_login()
     elif args.cmd == "run":
-        if args.since:
-            since = date.fromisoformat(args.since)
-        else:
-            db.init_db()
-            last = db.latest_date("daily_summary")
-            # Re-fetch from the last recorded date itself (not +1): this
-            # both re-confirms that day in case it was edited after the
-            # fact, and naturally backfills any gap (e.g. laptop closed
-            # for a few days) up through yesterday in the same pass.
-            since = date.fromisoformat(last) if last else (date.today() - timedelta(days=7))
+        db.init_db()
+        # Re-fetch from the last recorded date itself (not +1): this
+        # both re-confirms that day in case it was edited after the
+        # fact, and naturally backfills any gap (e.g. laptop closed
+        # for a few days, or a stretch of failed runs) up through
+        # yesterday in the same pass.
+        since = resolve_since(args.since)
         run(since, args.headed)

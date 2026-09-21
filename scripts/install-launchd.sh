@@ -76,16 +76,34 @@ if [[ ! -x "${PROJECT}/.venv/bin/python" ]]; then
   echo "warning: ${PROJECT}/.venv/bin/python not found; create the venv before the first scheduled run." >&2
 fi
 
+# Reinstall without --email should not wipe a previously configured address.
+EXISTING_PLIST="${LAUNCH_AGENTS}/${LABEL_SCRAPER}.plist"
+if [[ -z "$ALERT_EMAIL" && -f "$EXISTING_PLIST" ]]; then
+  ALERT_EMAIL="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:LOSEIT_ALERT_EMAIL' "$EXISTING_PLIST" 2>/dev/null || true)"
+  if [[ -n "$ALERT_EMAIL" ]]; then
+    echo "preserving alert email from existing plist"
+  fi
+fi
+
 mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR" "$BIN_DIR"
 
 # Install launchd-facing copies outside ~/Documents (TCC).
 cp "${PROJECT}/scripts/run-scraper.sh" "${BIN_DIR}/run-scraper.sh"
 cp "${PROJECT}/scripts/health-check.sh" "${BIN_DIR}/health-check.sh"
-chmod +x "${BIN_DIR}/run-scraper.sh" "${BIN_DIR}/health-check.sh"
+cp "${PROJECT}/scripts/send-alert.sh" "${BIN_DIR}/send-alert.sh"
+chmod +x "${BIN_DIR}/run-scraper.sh" "${BIN_DIR}/health-check.sh" "${BIN_DIR}/send-alert.sh"
 echo "installed wrappers to ${BIN_DIR}/"
 
 project_xml=$(xml_escape "$PROJECT")
-env_entries="    <key>LOSEIT_PROJECT</key>
+home_xml=$(xml_escape "$HOME")
+user_xml=$(xml_escape "$(id -un)")
+env_entries="    <key>HOME</key>
+    <string>${home_xml}</string>
+    <key>USER</key>
+    <string>${user_xml}</string>
+    <key>LOGNAME</key>
+    <string>${user_xml}</string>
+    <key>LOSEIT_PROJECT</key>
     <string>${project_xml}</string>"
 if [[ -n "$ALERT_EMAIL" ]]; then
   email_xml=$(xml_escape "$ALERT_EMAIL")
@@ -144,6 +162,10 @@ write_plist() {
 
   <key>RunAtLoad</key>
   <false/>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
 ${env_block}
 </dict>
 </plist>

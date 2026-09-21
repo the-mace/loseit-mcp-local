@@ -18,6 +18,8 @@ DATA_DIR="${HOME}/.loseit-data"
 LOG_DIR="${DATA_DIR}/logs"
 MARKER="${DATA_DIR}/last_success"
 ALERT_EMAIL="${LOSEIT_ALERT_EMAIL:-}"
+SCRIPT_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SEND_ALERT="${SCRIPT_SELF}/send-alert.sh"
 
 # launchd gives a minimal PATH; ensure mail/date/etc. are findable.
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
@@ -51,7 +53,11 @@ if [[ "$STATUS" -ne 0 ]]; then
     }
   )
   if [[ -n "$ALERT_EMAIL" ]]; then
-    echo "$BODY" | mail -s "loseit-scraper FAILED" "$ALERT_EMAIL" || true
+    # Do not `|| true` without a log: a silent mail failure is how
+    # two months of scrape errors went unnoticed. send-alert.sh logs
+    # to ~/.loseit-data/logs/alert.log; a send failure must not mask
+    # the scraper's exit code.
+    echo "$BODY" | "$SEND_ALERT" "loseit-scraper FAILED" || echo "WARNING: failed to send failure alert (see ${LOG_DIR}/alert.log)" >&2
   else
     echo "WARNING: scrape failed (exit ${STATUS}); set LOSEIT_ALERT_EMAIL to enable email alerts" >&2
   fi
