@@ -39,6 +39,8 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 import db
 
@@ -575,6 +577,45 @@ def fetch_water(page, day: date):
         db.upsert_water(day.isoformat(), float(value))
 
 
+# Retry a hung document load (cold network, or a request that never
+# finishes). A logged-out page raises RuntimeError and is not retried.
+_HOME_ATTEMPTS = 3
+_HOME_GOTO_TIMEOUT_MS = 20000
+_HOME_RETRY_PAUSE_MS = 2000
+
+
+def _transient_navigation_error(exc: BaseException) -> bool:
+    if isinstance(exc, PlaywrightTimeoutError):
+        return True
+    return isinstance(exc, PlaywrightError) and "net::" in str(exc)
+
+
+def _open_logged_in_home(page) -> None:
+    """Open LoseIt and wait until the day log is on screen.
+
+    ``networkidle`` is the wrong signal. Tag-manager and CDN requests
+    stay in flight after the GWT log has rendered, so a 30s networkidle
+    wait fails the run before ``_await_dashboard`` ever runs. Readiness
+    is the dashboard itself.
+    """
+    for attempt in range(1, _HOME_ATTEMPTS + 1):
+        try:
+            page.goto(
+                LOSEIT_BASE,
+                wait_until="domcontentloaded",
+                timeout=_HOME_GOTO_TIMEOUT_MS,
+            )
+            _await_dashboard(page)
+            return
+        except Exception as exc:
+            if attempt == _HOME_ATTEMPTS or not _transient_navigation_error(exc):
+                raise
+            print(
+                f"LoseIt home timed out (attempt {attempt}/{_HOME_ATTEMPTS}); retrying."
+            )
+            page.wait_for_timeout(_HOME_RETRY_PAUSE_MS)
+
+
 def resolve_since(since: str | None, today: date | None = None) -> date:
     """Start date for a run: explicit --since, else last stored daily_summary
     date (re-fetched in case it was edited), else 7 days before today.
@@ -615,8 +656,7 @@ def run(since: date, headed: bool):
         browser = p.chromium.launch(headless=not headed)
         context = browser.new_context(storage_state=str(STATE_PATH))
         page = context.new_page()
-        page.goto(LOSEIT_BASE, wait_until="networkidle")
-        _await_dashboard(page)
+        _open_logged_in_home(page)
 
         while d < today:
             print(f"Fetching {d.isoformat()}...")

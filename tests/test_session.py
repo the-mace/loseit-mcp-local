@@ -1,10 +1,15 @@
-"""Catch-up start date and saved-session expiry (no browser)."""
+"""Catch-up start date, saved-session expiry, and home-page open (no browser)."""
 import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 import db
-from scraper import _auth_session_expired, resolve_since
+import scraper
+from scraper import _auth_session_expired, _open_logged_in_home, resolve_since
 
 
 def _summary(day: str) -> dict:
@@ -78,3 +83,57 @@ def test_auth_session_expired_when_file_missing(tmp_path):
 def test_auth_session_expired_when_no_auth_cookies(tmp_path):
     path = _state(tmp_path, [{"name": "_ga", "expires": 9999999999.0}])
     assert _auth_session_expired(path, now_ts=1.0) is True
+
+
+class _Page:
+    def __init__(self, effects):
+        self.effects = list(effects)
+        self.calls = []
+        self.waits = []
+
+    def goto(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        effect = self.effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+
+    def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+
+def test_open_home_retries_timeout_then_uses_dashboard(monkeypatch):
+    page = _Page([PlaywrightTimeoutError("timeout"), None])
+    monkeypatch.setattr(scraper, "_await_dashboard", lambda p: None)
+    _open_logged_in_home(page)
+    assert len(page.calls) == 2
+    assert page.calls[0][1]["wait_until"] == "domcontentloaded"
+    assert page.waits == [2000]
+
+
+def test_open_home_retries_disconnected_network(monkeypatch):
+    page = _Page([PlaywrightError("net::ERR_INTERNET_DISCONNECTED"), None])
+    monkeypatch.setattr(scraper, "_await_dashboard", lambda p: None)
+    _open_logged_in_home(page)
+    assert len(page.calls) == 2
+
+
+def test_open_home_does_not_retry_logged_out(monkeypatch):
+    page = _Page([None])
+
+    def logged_out(p):
+        raise RuntimeError("LoseIt session expired or is not logged in.")
+
+    monkeypatch.setattr(scraper, "_await_dashboard", logged_out)
+    with pytest.raises(RuntimeError, match="session expired"):
+        _open_logged_in_home(page)
+    assert len(page.calls) == 1
+    assert page.waits == []
+
+
+def test_open_home_raises_after_three_timeouts(monkeypatch):
+    page = _Page([PlaywrightTimeoutError("timeout")] * 3)
+    monkeypatch.setattr(scraper, "_await_dashboard", lambda p: None)
+    with pytest.raises(PlaywrightTimeoutError):
+        _open_logged_in_home(page)
+    assert len(page.calls) == 3
+    assert page.waits == [2000, 2000]
