@@ -1,4 +1,4 @@
-# LoseIt Local MCP — Build Brief
+# LoseIt Local MCP — agent notes
 
 ## Before starting any work
 
@@ -23,94 +23,43 @@ will be fragile against LoseIt UI changes. Flag clearly if something during
 the build makes unattended daily runs non-viable (e.g. LoseIt requires
 solving a CAPTCHA on every login).
 
-## What's already built
+## Layout
 
-- `src/db.py` — SQLite schema + helpers (daily_summary, food_log,
-  weight_log, exercise_log tables). Complete, should not need changes.
-- `src/loseit_mcp.py` — MCP server (MCPServer / mcp v2) exposing 4
-  read-only tools over that SQLite data. Complete, should not need
-  changes unless the scraped schema needs to change.
-- `src/scraper.py` — Playwright scraper. **Login/session persistence is
-  implemented and should work as-is.** The actual data-extraction
-  functions (`fetch_day`, `fetch_weight`, `fetch_exercise`) are stubbed
-  with `NotImplementedError` and docstring TODOs — this is the main thing
-  to build.
+- `src/db.py` — SQLite schema + helpers (`daily_summary`, `food_log`,
+  `weight_log`, `water_log`).
+- `src/loseit_mcp.py` — MCP server (mcp v2) exposing 4 read-only tools:
+  `get_daily_summary`, `get_food_log`, `get_weight_history`,
+  `get_water_log`.
+- `src/scraper.py` — Playwright scraper. `login` opens a headed browser and
+  saves the session to `~/.loseit-data/state.json`; `run` fetches yesterday
+  (or `--since YYYY-MM-DD`), `--headed` for a visible browser. `fetch_day`,
+  `fetch_weight`, and `fetch_water` read the live site. Individual exercise
+  entries are deliberately not scraped; only the day's exercise-calorie
+  total is kept, so remaining calories match LoseIt's own figure.
 - `scripts/install-launchd.sh` — writes launchd agents into
   `~/Library/LaunchAgents` with absolute paths derived at install time
   (labels: `com.loseit-mcp.scraper`, `com.loseit-mcp.scraper-health`).
 - `requirements.txt` — playwright + mcp.
 
-## Your task, in order
+## Changing the scraper
 
-1. **Set up the environment.**
-   ```
-   python3 -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
-   playwright install chromium
-   ```
+When LoseIt's UI changes, re-record selectors with
+`playwright codegen --load-storage=~/.loseit-data/state.json https://www.loseit.com`
+and confirm URL patterns and date formats with Rob rather than assuming.
+Test on a few recent days with `python src/scraper.py run --since <date> --headed`,
+then check the stored rows:
 
-2. **Get me logged in.**
-   Run `python src/scraper.py login`. This opens a real (headed) browser
-   window on my Mac. Tell me to log in manually, wait for me to confirm,
-   then it saves session state to `~/.loseit-data/state.json`.
+```
+sqlite3 ~/.loseit-data/loseit.db "SELECT * FROM daily_summary ORDER BY date DESC LIMIT 5;"
+sqlite3 ~/.loseit-data/loseit.db "SELECT * FROM food_log ORDER BY date DESC LIMIT 10;"
+```
 
-3. **Record the real selectors together with me.**
-   Run `playwright codegen --load-storage=~/.loseit-data/state.json
-   https://www.loseit.com` and have me navigate to: a specific day's log
-   page, the weight log, and the exercise log. Watch the generated code
-   and the Inspector panel to capture the real selectors/URL patterns for:
-   - daily calorie budget / eaten / remaining
-   - daily macro totals (protein/carbs/fat) if shown
-   - the repeating food-log row structure (name, brand, quantity, units,
-     calories, macros per item)
-   - weight log entries per date
-   - exercise log entries per date (name, duration, calories burned)
+A change is done when 2-3 real days match loseit.com by hand and a headless
+`run` succeeds (that is how it runs daily). Logs: `~/.loseit-data/logs/`.
 
-   Ask me to confirm URL patterns and date formats rather than assuming.
-
-4. **Fill in `fetch_day`, `fetch_weight`, `fetch_exercise` in
-   `src/scraper.py`** using the real selectors from step 3. Keep the
-   existing function signatures and the `db.upsert_daily_summary` /
-   `db.insert_food_log_entry` / `db.upsert_weight` /
-   `db.insert_exercise_entry` calls — just replace the stub bodies with
-   real `page.goto()` / `page.locator()` logic.
-
-5. **Test on a small range with a visible browser first:**
-   ```
-   python src/scraper.py run --since <5 days ago> --headed
-   ```
-   Then verify against the actual SQLite data:
-   ```
-   sqlite3 ~/.loseit-data/loseit.db "SELECT * FROM daily_summary ORDER BY date DESC LIMIT 5;"
-   sqlite3 ~/.loseit-data/loseit.db "SELECT * FROM food_log ORDER BY date DESC LIMIT 10;"
-   ```
-   Iterate with me until the numbers match what I see on loseit.com for
-   those same days. Don't consider this done until we've cross-checked
-   at least 2-3 real days by hand.
-
-6. **Run it headless once cleanly** (`python src/scraper.py run`, no
-   `--headed`) to confirm it works without a visible browser — this is
-   how it'll run daily.
-
-7. **Schedule it.** Install launchd agents (paths filled from this checkout):
-   ```
-   bash scripts/install-launchd.sh --email <your-alert-email>
-   launchctl start com.loseit-mcp.scraper   # trigger once immediately
-   tail -f ~/.loseit-data/logs/scraper.log
-   ```
-
-8. **Wire the MCP server into Claude Desktop.** Config file lives at
-   `~/Library/Application Support/Claude/claude_desktop_config.json`. If
-   it already has other `mcpServers` entries (I have a `garmin` one),
-   merge — don't overwrite the file. Add:
-   ```json
-   "loseit": {
-     "command": "<absolute path>/.venv/bin/python",
-     "args": ["<absolute path>/src/loseit_mcp.py"]
-   }
-   ```
-   Tell me to fully quit (Cmd+Q) and reopen Claude Desktop, then confirm
-   I see a `loseit` connector with 4 tools.
+The MCP server is wired into Claude Desktop through
+`~/Library/Application Support/Claude/claude_desktop_config.json`, which
+also holds other `mcpServers` entries (`garmin`): merge, don't overwrite.
 
 ## Guardrails
 
