@@ -159,4 +159,4 @@ Fully quit and reopen Claude Desktop. You should see 4 tools under a
 - Persistent logs live under `~/.loseit-data/logs/`. Success stamp:
   `~/.loseit-data/last_success`.
 - Session cookies can expire or get invalidated; if `run` starts failing
-  across the board, redo step 2 (`python src/scraper.py login`).
+  across the board, redo step 2 (`.venv/bin/python src/scraper.py login`), then `.venv/bin/python src/scraper.py run` to catch up.

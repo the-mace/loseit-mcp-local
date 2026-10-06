@@ -124,7 +124,7 @@ def _await_dashboard(page, timeout_ms: int = 30000):
             if logged_out_hits >= 4:
                 raise RuntimeError(
                     "LoseIt session expired or is not logged in. "
-                    "Run `python src/scraper.py login` and try again."
+                    "Run `.venv/bin/python src/scraper.py login`, then `.venv/bin/python src/scraper.py run` to catch up."
                 )
         page.wait_for_timeout(500)
     raise RuntimeError(
@@ -152,7 +152,7 @@ def do_login():
         else:
             raise RuntimeError(
                 "Timed out waiting for a logged-in LoseIt daily log. "
-                "Leave the log page visible and re-run `python src/scraper.py login`."
+                "Leave the log page visible and re-run `.venv/bin/python src/scraper.py login`."
             )
         context.storage_state(path=str(STATE_PATH))
         browser.close()
@@ -632,12 +632,12 @@ def resolve_since(since: str | None, today: date | None = None) -> date:
 
 def run(since: date, headed: bool):
     if not STATE_PATH.exists():
-        print("No saved session found. Run `python scraper.py login` first.")
+        print("No saved session found. Run `.venv/bin/python src/scraper.py login`, then `.venv/bin/python src/scraper.py run` to catch up.")
         sys.exit(1)
     if _auth_session_expired(STATE_PATH):
         print(
             "Saved LoseIt auth cookies have expired. "
-            "Run `python src/scraper.py login` and then re-run."
+            "Run `.venv/bin/python src/scraper.py login`, then `.venv/bin/python src/scraper.py run` to catch up."
         )
         sys.exit(1)
 

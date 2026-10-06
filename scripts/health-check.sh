@@ -73,7 +73,8 @@ BODY=$(
     echo "$REASON"
     echo
     echo "Likely causes: Mac was asleep/off at 06:00, launchd job unloaded,"
-    echo "scraper failing every run, or session expired (re-run: python src/scraper.py login)."
+    echo "scraper failing every run, or session expired (run .venv/bin/python src/scraper.py login,"
+    echo "then .venv/bin/python src/scraper.py run to catch up)."
     if [[ -f "${DATA_DIR}/logs/scraper.log" ]]; then
       echo
       echo "---- last 40 lines of ${DATA_DIR}/logs/scraper.log ----"
