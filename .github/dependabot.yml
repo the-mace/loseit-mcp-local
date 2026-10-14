@@ -1,4 +1,5 @@
-# Dependabot version updates + grouping.
+# Dependabot version updates. pip bumps are one PR per package so the automerge
+# title check can read each version change.
 # Security updates are enabled at the repo level (automated-security-fixes).
 # Auto-merge after CI: patch bumps, and minor bumps unless the current version is 0.x.
 # Majors and unparseable/grouped titles stay open for review (see workflows/dependabot-auto-merge.yml).
@@ -11,15 +12,6 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     rebase-strategy: "auto"
-    # Keep Python deps in one PR when possible so the bot can ship faster.
-    groups:
-      python-dependencies:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-    # Majors get their own PRs and are left for manual review.
 
   - package-ecosystem: "github-actions"
     directory: "/"
