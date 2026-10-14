@@ -36,9 +36,6 @@ def _food(date="2026-07-10", meal="Breakfast", name="Eggs", **overrides):
     return row
 
 
-# --- daily_summary ---
-
-
 def test_upsert_daily_summary_inserts(tmp_db):
     db.upsert_daily_summary(_summary("2026-07-10", notes="Felt good"))
     rows = db.query_daily_summary("2026-07-10", "2026-07-10")
@@ -119,9 +116,6 @@ def test_query_daily_summary_date_range_and_order(tmp_db):
     assert [r["date"] for r in rows] == ["2026-07-10", "2026-07-11"]
 
 
-# --- food_log ---
-
-
 def test_insert_food_log_entry(tmp_db):
     db.insert_food_log_entry(_food())
     rows = db.query_food_log("2026-07-10", "2026-07-10")
@@ -171,9 +165,6 @@ def test_query_food_log_ordered_by_date_then_meal(tmp_db):
     ]
 
 
-# --- weight_log ---
-
-
 def test_upsert_weight_inserts_and_overwrites(tmp_db):
     db.upsert_weight("2026-07-10", 180.0, "lb")
     db.upsert_weight("2026-07-10", 179.5, "lb")
@@ -191,9 +182,6 @@ def test_query_weight_log_range(tmp_db):
     assert [r["date"] for r in rows] == ["2026-07-10", "2026-07-12"]
 
 
-# --- water_log ---
-
-
 def test_upsert_water_inserts_and_overwrites(tmp_db):
     db.upsert_water("2026-07-10", 64.0)
     db.upsert_water("2026-07-10", 80.0)
@@ -208,9 +196,6 @@ def test_query_water_log_range(tmp_db):
     db.upsert_water("2026-07-11", 72.0)
     rows = db.query_water_log("2026-07-10", "2026-07-11")
     assert [r["date"] for r in rows] == ["2026-07-10", "2026-07-11"]
-
-
-# --- latest_date ---
 
 
 def test_latest_date_empty_table(tmp_db):
