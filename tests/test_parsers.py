@@ -3,9 +3,6 @@ import pytest
 from scraper import _parse_number, _parse_quantity
 
 
-# --- _parse_quantity ---
-
-
 @pytest.mark.parametrize(
     "text, expected",
     [
@@ -37,9 +34,6 @@ def test_parse_quantity_whitespace_only():
     qty, units = _parse_quantity("   ")
     assert qty is None
     assert units == ""
-
-
-# --- _parse_number ---
 
 
 @pytest.mark.parametrize(
