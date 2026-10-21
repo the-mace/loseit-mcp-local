@@ -25,32 +25,38 @@ so calories_remaining_after_exercise can match LoseIt's own over/under-budget
 figure, which nets out exercise credit.
 
 Run modes:
-  python scraper.py login       -> opens a headed browser, log in manually,
-                                    saves session to ~/.loseit-data/state.json
+  python scraper.py login       -> prompts for email/password, logs in via
+                                    the app's token API (see auth.py), saves
+                                    tokens and seeds ~/.loseit-data/state.json
+  python scraper.py login --browser
+                                -> old flow: headed browser, log in manually;
+                                    no refresh token, so it lasts 14 days
   python scraper.py run         -> headless run: fetch + store data for
                                     yesterday (or --since YYYY-MM-DD)
   python scraper.py run --headed -> same as run, but visible browser
                                      (useful while you're still tuning selectors)
 """
 import argparse
+import getpass
 import json
 import sys
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
+import auth
 import db
 
 STATE_PATH = Path.home() / ".loseit-data" / "state.json"
 LOSEIT_BASE = "https://www.loseit.com"
-# Auth cookies observed in a real storage_state. LoseIt has been issuing
-# these with a ~14-day expiry from login; they are not extended by later
-# scrapes. Once they expire, www.loseit.com renders the public marketing
-# page instead of the GWT day log.
-_AUTH_COOKIE_NAMES = frozenset({"fn_auth", "liauth", "fn_authed"})
+# These carry a 14-day access token; browsing does not extend them, only
+# auth.refresh_session does. Once they expire, www.loseit.com renders the
+# public marketing page instead of the GWT day log.
+_AUTH_COOKIE_NAMES = auth.AUTH_COOKIE_NAMES
 _DATE_HEADER_RE_JS = r"^[A-Za-z]+\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4}$"
 
 
@@ -132,6 +138,21 @@ def _await_dashboard(page, timeout_ms: int = 30000):
     )
 
 
+def do_api_login():
+    """Prompt for LoseIt credentials and log in through the app's token API."""
+    default = (auth.load_tokens() or {}).get("username", "")
+    prompt = f"LoseIt email [{default}]: " if default else "LoseIt email: "
+    username = input(prompt).strip() or default
+    if not username:
+        raise SystemExit("An email address is required.")
+    password = getpass.getpass("LoseIt password (not shown): ")
+    try:
+        auth.password_login(username, password, STATE_PATH)
+    except auth.AuthError as exc:
+        raise SystemExit(str(exc))
+    print(f"Logged in. Tokens saved to {auth.TOKENS_PATH}; session seeded in {STATE_PATH}.")
+
+
 def do_login():
     """Opens a headed browser so you can log in manually (handles any
     CAPTCHA/verification LoseIt throws up), then saves the session."""
@@ -155,6 +176,7 @@ def do_login():
                 "Leave the log page visible and re-run `.venv/bin/python src/scraper.py login`."
             )
         context.storage_state(path=str(STATE_PATH))
+        STATE_PATH.chmod(0o600)
         browser.close()
     print(f"Session saved to {STATE_PATH}")
 
@@ -631,6 +653,14 @@ def resolve_since(since: str | None, today: date | None = None) -> date:
 
 
 def run(since: date, headed: bool):
+    try:
+        auth.refresh_session(STATE_PATH)
+    except auth.AuthError as exc:
+        print(f"LoseIt rejected the saved refresh token: {exc} {auth.LOGIN_HINT}")
+        sys.exit(1)
+    except httpx.HTTPError as exc:
+        # The saved cookies may still have days left; let the expiry check decide.
+        print(f"Couldn't reach LoseIt to refresh the session ({exc}); trying the saved one.")
     if not STATE_PATH.exists():
         print("No saved session found. Run `.venv/bin/python src/scraper.py login`, then `.venv/bin/python src/scraper.py run` to catch up.")
         sys.exit(1)
@@ -667,6 +697,7 @@ def run(since: date, headed: bool):
 
         # refresh session in case cookies rotated
         context.storage_state(path=str(STATE_PATH))
+        STATE_PATH.chmod(0o600)
         browser.close()
     print("Done.")
 
@@ -674,14 +705,15 @@ def run(since: date, headed: bool):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("login")
+    login_p = sub.add_parser("login")
+    login_p.add_argument("--browser", action="store_true", help="log in by hand in a headed browser (no refresh token; lasts 14 days)")
     run_p = sub.add_parser("run")
     run_p.add_argument("--since", type=str, default=None, help="YYYY-MM-DD, defaults to the last recorded date (re-fetched in case it was edited) through yesterday")
     run_p.add_argument("--headed", action="store_true")
     args = parser.parse_args()
 
     if args.cmd == "login":
-        do_login()
+        do_login() if args.browser else do_api_login()
     elif args.cmd == "run":
         db.init_db()
         # Re-fetch from the last recorded date itself (not +1): this

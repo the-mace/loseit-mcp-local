@@ -15,7 +15,8 @@ schema, or session-security changes. Grok Build is the second opinion.
 ## Repo specifics
 
 - After a pull that touches `requirements.txt`:
-  `source .venv/bin/activate && pip install -r requirements.txt`.
+  `source .venv/bin/activate && pip install -r requirements.txt`, and if
+  Playwright changed, `python -m playwright install chromium`.
 - Tests: `.venv/bin/python -m pytest` (CI runs the same suite).
 
 ## Context
@@ -39,8 +40,13 @@ solving a CAPTCHA on every login).
 - `src/loseit_mcp.py` — MCP server (mcp v2) exposing 4 read-only tools:
   `get_daily_summary`, `get_food_log`, `get_weight_history`,
   `get_water_log`.
-- `src/scraper.py` — Playwright scraper. `login` opens a headed browser and
-  saves the session to `~/.loseit-data/state.json`; `run` fetches yesterday
+- `src/auth.py` — login and token refresh through the iOS app's OAuth
+  endpoint (`sync.loseit.com/account/login`, found by capturing the app's
+  traffic). Tokens in `~/.loseit-data/tokens.json`; the access token doubles
+  as the web `fn_auth`/`liauth` cookies.
+- `src/scraper.py` — Playwright scraper. `login` prompts for email/password
+  and logs in via `auth.py` (`--browser` for the old headed-browser login);
+  `run` refreshes the token, then fetches yesterday
   (or `--since YYYY-MM-DD`), `--headed` for a visible browser. `fetch_day`,
   `fetch_weight`, and `fetch_water` read the live site. Individual exercise
   entries are deliberately not scraped; only the day's exercise-calorie
@@ -48,7 +54,7 @@ solving a CAPTCHA on every login).
 - `scripts/install-launchd.sh` — writes launchd agents into
   `~/Library/LaunchAgents` with absolute paths derived at install time
   (labels: `com.loseit-mcp.scraper`, `com.loseit-mcp.scraper-health`).
-- `requirements.txt` — playwright + mcp.
+- `requirements.txt` — playwright, mcp, httpx (token API).
 
 ## Changing the scraper
 
@@ -75,7 +81,7 @@ also holds other `mcpServers` entries (`garmin`): merge, don't overwrite.
 - Don't guess at LoseIt's DOM structure — always drive it from what we
   actually observe together via codegen or by inspecting real page output.
 - Don't weaken session security (e.g. don't print or log my LoseIt
-  password; `.env`/`state.json` should stay out of any git commit —
+  password or tokens; `.env`/`state.json`/`tokens.json` should stay out of any git commit —
   confirm `.gitignore` covers them if I decide to put this in git).
 - If LoseIt's login flow requires solving anything that can't run
   unattended (recurring CAPTCHA, email verification each time), stop and

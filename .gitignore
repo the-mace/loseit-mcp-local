@@ -21,6 +21,7 @@ __pycache__/
 *.db-journal
 *.db.bak*
 state.json
+tokens.json
 *.log
 last_success
 last_stale_alert

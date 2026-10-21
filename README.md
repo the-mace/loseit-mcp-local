@@ -35,16 +35,21 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## 2. Log in once (saves your session)
+## 2. Log in once
 
 ```bash
 python src/scraper.py login
 ```
 
-A real browser window opens. Log into LoseIt manually (this sidesteps any
-CAPTCHA/bot-check LoseIt might show, since it's genuinely you clicking).
-Once you're on your dashboard, go back to the terminal and press Enter.
-Your session is saved to `~/.loseit-data/state.json`.
+Enter your LoseIt email and password at the prompt (the password is not
+shown or stored). This logs in through the same token endpoint the iOS app
+uses, which has no CAPTCHA, and saves an access/refresh token pair to
+`~/.loseit-data/tokens.json` (mode 600). Every `run` trades the refresh
+token for a new 14-day access token and writes it into the browser session
+at `~/.loseit-data/state.json`, so daily runs stay logged in on their own.
+
+`python src/scraper.py login --browser` is the old flow: log in by hand in
+a real browser window. It gets no refresh token, so it lasts 14 days.
 
 ## 3. Run the scraper
 
@@ -158,5 +163,10 @@ Fully quit and reopen Claude Desktop. You should see 4 tools under a
   food log, weight, and water. Individual exercise entries are not scraped.
 - Persistent logs live under `~/.loseit-data/logs/`. Success stamp:
   `~/.loseit-data/last_success`.
-- Session cookies can expire or get invalidated; if `run` starts failing
-  across the board, redo step 2 (`.venv/bin/python src/scraper.py login`), then `.venv/bin/python src/scraper.py run` to catch up.
+- If LoseIt rejects the saved refresh token (for example after a password
+  change, or if the Mac was off long enough for the access token to expire),
+  `run` fails with a message saying so; redo step 2
+  (`.venv/bin/python src/scraper.py login`), then
+  `.venv/bin/python src/scraper.py run` to catch up.
+- After a Playwright version bump, run `.venv/bin/python -m playwright install chromium`
+  or the next `run` fails with "Executable doesn't exist".
