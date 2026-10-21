@@ -3,8 +3,10 @@
 A local pipeline: Playwright scrapes your LoseIt data daily → stores it in
 SQLite → an MCP server reads it into Claude Desktop. There is no public
 LoseIt API, so this reads your own account through the web UI and keeps
-the data on your machine. The scraper may need updates if LoseIt changes
-their site.
+the data on your machine. Login goes through the token endpoint the LoseIt
+iOS app uses, and the scraper refreshes that token on every run, so the
+daily job stays signed in without a manual re-login every 14 days. The
+scraper may need updates if LoseIt changes their site.
 
 **License:** MIT (see [LICENSE](LICENSE)).
 
@@ -20,9 +22,10 @@ already have a checkout.
 
 ## Privacy note
 
-Session cookies, SQLite food/weight history, and logs live under
-`~/.loseit-data/` (outside this repo). Do not commit that directory, any
-`state.json`, or `*.db` files. The included `.gitignore` is set up to keep
+Login tokens (`tokens.json`), session cookies (`state.json`), SQLite
+food/weight history, and logs live under `~/.loseit-data/` (outside this
+repo). Do not commit that directory, any `tokens.json` or `state.json`, or
+`*.db` files. Your password is never stored. The included `.gitignore` is set up to keep
 them out.
 
 ## 1. Install dependencies
