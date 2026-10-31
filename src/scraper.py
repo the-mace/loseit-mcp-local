@@ -570,8 +570,34 @@ def fetch_weight(page, day: date):
         db.upsert_weight(day.isoformat(), float(value), "lb")
 
 
-def fetch_water(page, day: date):
+# Keyed off the widget's visible label: the input's GWT hash class changed
+# on a LoseIt redeploy (GPOEIKGBUC -> GPOEIKGPTC, Oct 2026) and the old
+# exact-class match then found nothing, silently.
+_WATER_INPUT_JS = r"""() => {
+    const norm = s => (s || '').replace(/[\s\u00a0]+/g, ' ').trim().toLowerCase();
+    const isHidden = e => {
+        for (let n = e; n && n.nodeType === 1; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+        }
+        return false;
+    };
+    const label = Array.from(document.querySelectorAll('div.gwt-HTML'))
+        .find(e => norm(e.textContent) === "today's water intake" && !isHidden(e));
+    let box = label;
+    for (let i = 0; box && i < 12; i++, box = box.parentElement) {
+        const el = box.querySelector('input.gwt-TextBox');
+        if (el) return el.value.trim();
+    }
+    return null;
+}"""
+
+
+def fetch_water(page, day: date) -> bool:
     """Scrape fluid ounces logged for `day` from the Water Intake widget.
+
+    Returns False when the widget itself can't be found (as opposed to a
+    day with nothing logged), so the caller can fail the run loudly.
 
     That widget only refreshes to match the currently-navigated date if
     you're on a *different* sub-tab (e.g. Weight) at the moment the date
@@ -584,19 +610,12 @@ def fetch_water(page, day: date):
     _goto_date(page, day)
     _click_tab(page, "Water Intake")
     page.wait_for_timeout(500)
-    value = page.evaluate(
-        """() => {
-            // Same widget-value class as the weight input (gwt-TextBox
-            // GPOEIKGBUC, no extra classes) -- deliberately more specific
-            // than 'input.gwt-TextBox' alone, which also matches the
-            // 'search & add food/exercise' boxes elsewhere on the page.
-            const inputs = Array.from(document.querySelectorAll('input.gwt-TextBox'));
-            const el = inputs.find(i => i.className.trim() === 'gwt-TextBox GPOEIKGBUC' && !i.disabled);
-            return el ? el.value.trim() : '';
-        }"""
-    )
+    value = page.evaluate(_WATER_INPUT_JS)
+    if value is None:
+        return False
     if value:
-        db.upsert_water(day.isoformat(), float(value))
+        db.upsert_water(day.isoformat(), _parse_number(value))
+    return True
 
 
 # Retry a hung document load (cold network, or a request that never
@@ -688,17 +707,28 @@ def run(since: date, headed: bool):
         page = context.new_page()
         _open_logged_in_home(page)
 
+        water_missing = []
         while d < today:
             print(f"Fetching {d.isoformat()}...")
             fetch_day(page, d)
             fetch_weight(page, d)
-            fetch_water(page, d)
+            if not fetch_water(page, d):
+                water_missing.append(d.isoformat())
             d += timedelta(days=1)
 
         # refresh session in case cookies rotated
         context.storage_state(path=str(STATE_PATH))
         STATE_PATH.chmod(0o600)
         browser.close()
+    if water_missing:
+        # Exit non-zero only after the other data is stored, so the
+        # launchd wrapper sends its failure alert.
+        print(
+            "Water Intake widget not found for "
+            f"{', '.join(water_missing)}; LoseIt's page markup may have changed. "
+            "Food, weight, and summary were saved."
+        )
+        sys.exit(2)
     print("Done.")
 
 

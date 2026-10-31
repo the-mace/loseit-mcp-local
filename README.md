@@ -171,5 +171,8 @@ Fully quit and reopen Claude Desktop. You should see 4 tools under a
   `run` fails with a message saying so; redo step 2
   (`.venv/bin/python src/scraper.py login`), then
   `.venv/bin/python src/scraper.py run` to catch up.
+- If the Water Intake widget can't be found on the page (usually a LoseIt
+  redeploy), `run` still saves food, weight, and summary, then exits
+  non-zero naming the days, so the failure alert fires.
 - After a Playwright version bump, run `.venv/bin/python -m playwright install chromium`
   or the next `run` fails with "Executable doesn't exist".
