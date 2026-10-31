@@ -530,9 +530,44 @@ def fetch_day(page, day: date):
         })
 
 
-def fetch_weight(page, day: date):
+# The label ("Oct 30 weight", or "today's weight") is stable text; the
+# input's GWT hash class is not. Past days render the input disabled.
+_WEIGHT_INPUT_JS = r"""() => {
+    const norm = s => (s || '').replace(/[\s\u00a0]+/g, ' ').trim();
+    const isHidden = e => {
+        for (let n = e; n && n.nodeType === 1; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+        }
+        return false;
+    };
+    const label = Array.from(document.querySelectorAll('div.gwt-HTML'))
+        .find(e => /^(today's|[A-Za-z]{3} \d{1,2}(, \d{4})?) weight$/i.test(norm(e.textContent)) && !isHidden(e));
+    let box = label;
+    for (let i = 0; box && i < 12; i++, box = box.parentElement) {
+        const el = box.querySelector('input.gwt-TextBox');
+        if (el) return {label: norm(label.textContent), value: el.value.trim()};
+    }
+    return null;
+}"""
+
+
+def _weight_label_matches(label: str, day: date, today: date) -> bool:
+    """The widget can stay bound to another day after tab switches; its
+    label names the day it is actually showing."""
+    label = label.lower()
+    if day == today:
+        return label == "today's weight"
+    short = f"{day:%b} {day.day}".lower()
+    return label in (f"{short} weight", f"{short}, {day.year} weight")
+
+
+def fetch_weight(page, day: date, today: date | None = None) -> bool:
     """Scrape the body weight logged for `day`, if any, from the Weight
     widget on the dashboard.
+
+    Returns False when the widget can't be found or shows a different day,
+    so the caller can fail the run loudly.
 
     Switching onto the Weight sub-tab resets its internal date-binding to
     "today", independent of whatever the main date header already shows
@@ -550,24 +585,12 @@ def fetch_weight(page, day: date):
     page.click(".nextArrowButton")
     page.wait_for_timeout(400)
     _goto_date(page, day)
-    value = page.evaluate(
-        """() => {
-            // LoseIt uses two shapes for the weight widget:
-            // - a disabled gwt-TextBox on some past days / empty states
-            // - an editable `gwt-TextBox GPOEIKGBUC` once a weight is logged
-            //   (same class family as the water input; safe here because we
-            //   are on the Weight tab after the nav dance above)
-            const disabled = document.querySelector('input.gwt-TextBox[disabled]');
-            if (disabled && disabled.value.trim()) return disabled.value.trim();
-            const inputs = Array.from(document.querySelectorAll('input.gwt-TextBox'));
-            const el = inputs.find(
-                i => i.className.trim() === 'gwt-TextBox GPOEIKGBUC' && !i.disabled
-            );
-            return el ? el.value.trim() : '';
-        }"""
-    )
-    if value:
-        db.upsert_weight(day.isoformat(), float(value), "lb")
+    found = page.evaluate(_WEIGHT_INPUT_JS)
+    if found is None or not _weight_label_matches(found["label"], day, today or date.today()):
+        return False
+    if found["value"]:
+        db.upsert_weight(day.isoformat(), float(found["value"]), "lb")
+    return True
 
 
 # Keyed off the widget's visible label: the input's GWT hash class changed
@@ -707,26 +730,26 @@ def run(since: date, headed: bool):
         page = context.new_page()
         _open_logged_in_home(page)
 
-        water_missing = []
+        missing = []
         while d < today:
             print(f"Fetching {d.isoformat()}...")
             fetch_day(page, d)
-            fetch_weight(page, d)
+            if not fetch_weight(page, d):
+                missing.append(f"weight {d.isoformat()}")
             if not fetch_water(page, d):
-                water_missing.append(d.isoformat())
+                missing.append(f"water {d.isoformat()}")
             d += timedelta(days=1)
 
         # refresh session in case cookies rotated
         context.storage_state(path=str(STATE_PATH))
         STATE_PATH.chmod(0o600)
         browser.close()
-    if water_missing:
+    if missing:
         # Exit non-zero only after the other data is stored, so the
         # launchd wrapper sends its failure alert.
         print(
-            "Water Intake widget not found for "
-            f"{', '.join(water_missing)}; LoseIt's page markup may have changed. "
-            "Food, weight, and summary were saved."
+            f"Couldn't read the widget for {', '.join(missing)}; "
+            "LoseIt's page markup may have changed. Everything else was saved."
         )
         sys.exit(2)
     print("Done.")
