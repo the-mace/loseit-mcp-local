@@ -106,10 +106,46 @@ def test_fetch_weight_stores_value(tmp_db, no_nav):
     assert [(r["weight"], r["units"]) for r in rows] == [(150.5, "lb")]
 
 
-def test_fetch_weight_empty_day_stores_nothing(tmp_db, no_nav):
+def test_fetch_weight_empty_day_stores_nothing_and_is_not_a_failure(tmp_db, no_nav, capsys):
     page = _Page({"label": "Jul 10 weight", "value": ""})
     assert scraper.fetch_weight(page, _DAY, today=_TODAY) is True
     assert db.query_weight_log("2026-07-10", "2026-07-10") == []
+    assert "No weight logged for 2026-07-10" in capsys.readouterr().out
+
+
+def _weights():
+    return [(r["date"], r["weight"]) for r in db.query_weight_log("2026-07-01", "2026-07-31")]
+
+
+def test_fetch_weight_skips_repeat_of_previous_day_and_is_not_a_failure(tmp_db, no_nav, capsys):
+    db.upsert_weight("2026-07-08", 150.5)
+    page = _Page({"label": "Jul 10 weight", "value": "150.5"})
+    assert scraper.fetch_weight(page, _DAY, today=_TODAY) is True
+    assert _weights() == [("2026-07-08", 150.5)]
+    assert "repeats 2026-07-08" in capsys.readouterr().out
+
+
+def test_fetch_weight_removes_previously_stored_repeat(tmp_db, no_nav):
+    db.upsert_weight("2026-07-09", 150.5)
+    db.upsert_weight("2026-07-10", 150.5)
+    page = _Page({"label": "Jul 10 weight", "value": "150.5"})
+    assert scraper.fetch_weight(page, _DAY, today=_TODAY) is True
+    assert _weights() == [("2026-07-09", 150.5)]
+
+
+def test_fetch_weight_stores_changed_weight_over_old_row(tmp_db, no_nav):
+    db.upsert_weight("2026-07-09", 150.5)
+    db.upsert_weight("2026-07-10", 151.0)
+    page = _Page({"label": "Jul 10 weight", "value": "150.0"})
+    assert scraper.fetch_weight(page, _DAY, today=_TODAY) is True
+    assert _weights() == [("2026-07-09", 150.5), ("2026-07-10", 150.0)]
+
+
+def test_fetch_weight_compares_with_earlier_days_only(tmp_db, no_nav):
+    db.upsert_weight("2026-07-11", 150.5)
+    page = _Page({"label": "Jul 10 weight", "value": "150.5"})
+    assert scraper.fetch_weight(page, _DAY, today=_TODAY) is True
+    assert _weights() == [("2026-07-10", 150.5), ("2026-07-11", 150.5)]
 
 
 @pytest.mark.parametrize("found", [None, {"label": "today's weight", "value": "150.5"}])

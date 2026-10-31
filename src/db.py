@@ -160,6 +160,20 @@ def upsert_water(date: str, fluid_ounces: float):
         )
 
 
+def previous_weight(date: str):
+    """The most recent stored weight row before `date`, or None."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM weight_log WHERE date < ? ORDER BY date DESC LIMIT 1", (date,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_weight(date: str, weight: float):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM weight_log WHERE date = ? AND weight = ?", (date, weight))
+
+
 def query_daily_summary(start: str, end: str):
     with get_conn() as conn:
         cur = conn.execute(

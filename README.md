@@ -174,6 +174,9 @@ Fully quit and reopen Claude Desktop. You should see 4 tools under a
 - Each fetched day's food log is replaced with exactly what LoseIt shows,
   so edited and deleted entries drop out. A day is only replaced when its
   meal list loaded and adds up to the day's Food total.
+- A weight that exactly repeats the previous stored day is treated as a
+  missed sync (LoseIt shows the last weigh-in on days with none) and is not
+  stored. Neither that nor a day with no weigh-in fails the run.
 - If the food log, Weight, or Water Intake widget can't be read for a day
   (usually a LoseIt redeploy), `run` still saves everything else, then
   exits non-zero naming the widget and days, so the failure alert fires.
