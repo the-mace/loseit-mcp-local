@@ -39,6 +39,7 @@ Run modes:
 import argparse
 import getpass
 import json
+import re
 import sys
 import time
 import unicodedata
@@ -595,7 +596,7 @@ _WEIGHT_INPUT_JS = r"""() => {
         return false;
     };
     const label = Array.from(document.querySelectorAll('div.gwt-HTML'))
-        .find(e => /^(today's|[A-Za-z]{3} \d{1,2}(, \d{4})?) weight$/i.test(norm(e.textContent)) && !isHidden(e));
+        .find(e => /^(today's|[A-Za-z]{3,9} \d{1,2}(, \d{4})?) weight$/i.test(norm(e.textContent)) && !isHidden(e));
     let box = label;
     for (let i = 0; box && i < 12; i++, box = box.parentElement) {
         const el = box.querySelector('input.gwt-TextBox');
@@ -605,14 +606,28 @@ _WEIGHT_INPUT_JS = r"""() => {
 }"""
 
 
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july",
+           "august", "september", "october", "november", "december")
+_WEIGHT_LABEL_RE = re.compile(r"^([a-z]{3,9}) (\d{1,2})(?:, (\d{4}))? weight$")
+
+
 def _weight_label_matches(label: str, day: date, today: date) -> bool:
     """The widget can stay bound to another day after tab switches; its
-    label names the day it is actually showing."""
+    label names the day it is actually showing. LoseIt abbreviates months
+    to three letters except "Sept"."""
     label = label.lower()
     if day == today:
         return label == "today's weight"
-    short = f"{day:%b} {day.day}".lower()
-    return label in (f"{short} weight", f"{short}, {day.year} weight")
+    m = _WEIGHT_LABEL_RE.match(label)
+    if not m:
+        return False
+    month, dom, year = m.groups()
+    return (
+        len(month) >= 3
+        and _MONTHS[day.month - 1].startswith(month)
+        and int(dom) == day.day
+        and (year is None or int(year) == day.year)
+    )
 
 
 def fetch_weight(page, day: date, today: date | None = None) -> bool:

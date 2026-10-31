@@ -57,6 +57,12 @@ def test_weight_lookup_returns_none_without_widget(browser_page):
     [
         ("Jul 10 weight", date(2026, 7, 10), True),
         ("Jul 1 weight", date(2026, 7, 1), True),
+        ("Sept 15 weight", date(2026, 9, 15), True),
+        ("Sep 15 weight", date(2026, 9, 15), True),
+        ("September 15 weight", date(2026, 9, 15), True),
+        ("Sept 15 weight", date(2026, 10, 15), False),
+        ("Jun 15 weight", date(2026, 7, 15), False),
+        ("Dec 31, 2024 weight", date(2025, 12, 31), False),
         ("Dec 31, 2025 weight", date(2025, 12, 31), True),
         ("today's weight", date(2026, 7, 11), True),
         ("Jul 9 weight", date(2026, 7, 10), False),
