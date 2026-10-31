@@ -397,9 +397,10 @@ def _click_tab(page, label: str):
 
 def _meal_food_items(page):
     """Return [{meal, name, quantity_text, calories_text}, ...] for the
-    Breakfast/Lunch/Dinner/Snacks sections of the day log. The Exercise
-    section further down the same log is deliberately not read here --
-    fitness data is out of scope for this scraper."""
+    Breakfast/Lunch/Dinner/Snacks sections of the day log, or None when the
+    meal log isn't on the page. The Exercise section further down the same
+    log is deliberately not read here -- fitness data is out of scope for
+    this scraper."""
     return page.evaluate(
         """() => {
             function findMealContainer() {
@@ -411,13 +412,13 @@ def _meal_food_items(page):
                 return null;
             }
             let el = findMealContainer();
-            let depth = 0;
-            while (el && depth < 15) {
+            let found = false;
+            for (let depth = 0; el && depth < 15; depth++) {
                 const t = el.textContent;
-                if (t.includes('Breakfast') && t.includes('Lunch') && t.includes('Dinner') && t.includes('Snacks') && t.includes('Exercise')) break;
-                el = el.parentElement; depth++;
+                if (t.includes('Breakfast') && t.includes('Lunch') && t.includes('Dinner') && t.includes('Snacks') && t.includes('Exercise')) { found = true; break; }
+                el = el.parentElement;
             }
-            if (!el) return [];
+            if (!found) return null;
             const mealNames = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
             const results = [];
             for (let i = 0; i < mealNames.length; i++) {
@@ -503,10 +504,30 @@ def _day_notes(page):
     )
 
 
-def fetch_day(page, day: date):
+# Row calories summed to the Food total exactly on every day checked
+# (Jul-Oct 2026); this only absorbs float noise.
+_FOOD_TOTAL_TOLERANCE = 0.5
+
+
+def _food_confirmed(items, food_total: float) -> bool:
+    """True when the scraped meal list is safe to replace the stored day
+    with: the list was found and its calories add up to the summary's Food
+    total. A stale list (the header rebinds before the meal rows) or a
+    half-rendered page fails the sum."""
+    if items is None:
+        return False
+    total = sum(_parse_number(i["calories_text"]) for i in items)
+    return abs(total - food_total) <= _FOOD_TOTAL_TOLERANCE
+
+
+def fetch_day(page, day: date) -> bool:
     """Scrape the daily calorie budget/eaten totals, macro totals, daily notes,
     and the individual food log entries for `day` off the LoseIt dashboard
-    (which doubles as the per-day log view once navigated to that date)."""
+    (which doubles as the per-day log view once navigated to that date).
+
+    The stored food rows for `day` are replaced with exactly what LoseIt
+    shows, so edits and deletions carry over. Returns False, leaving the
+    stored rows alone, when the meal list can't be confirmed for `day`."""
     _goto_date(page, day)
 
     calorie_budget = _parse_number(_summary_value(page, "Budget") or "0")
@@ -541,10 +562,13 @@ def fetch_day(page, day: date):
         "notes": notes,
     })
 
-    for item in _meal_food_items(page):
+    items = _meal_food_items(page)
+    if _read_displayed_date(page) != day or not _food_confirmed(items, calories_eaten):
+        return False
+    rows = []
+    for item in items:
         quantity, units = _parse_quantity(item["quantity_text"])
-        db.insert_food_log_entry({
-            "date": day.isoformat(),
+        rows.append({
             "meal": item["meal"],
             "name": item["name"],
             "brand": None,  # not exposed as a separate field in the row DOM
@@ -555,6 +579,8 @@ def fetch_day(page, day: date):
             "carbs_g": None,
             "fat_g": None,
         })
+    db.replace_food_log(day.isoformat(), rows)
+    return True
 
 
 # The label ("Oct 30 weight", or "today's weight") is stable text; the
@@ -760,7 +786,8 @@ def run(since: date, headed: bool):
         missing = []
         while d < today:
             print(f"Fetching {d.isoformat()}...")
-            fetch_day(page, d)
+            if not fetch_day(page, d):
+                missing.append(f"food {d.isoformat()}")
             if not fetch_weight(page, d):
                 missing.append(f"weight {d.isoformat()}")
             if not fetch_water(page, d):

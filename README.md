@@ -171,8 +171,11 @@ Fully quit and reopen Claude Desktop. You should see 4 tools under a
   `run` fails with a message saying so; redo step 2
   (`.venv/bin/python src/scraper.py login`), then
   `.venv/bin/python src/scraper.py run` to catch up.
-- If the Weight or Water Intake widget can't be read for a day (usually a
-  LoseIt redeploy), `run` still saves everything else, then exits non-zero
-  naming the widget and days, so the failure alert fires.
+- Each fetched day's food log is replaced with exactly what LoseIt shows,
+  so edited and deleted entries drop out. A day is only replaced when its
+  meal list loaded and adds up to the day's Food total.
+- If the food log, Weight, or Water Intake widget can't be read for a day
+  (usually a LoseIt redeploy), `run` still saves everything else, then
+  exits non-zero naming the widget and days, so the failure alert fires.
 - After a Playwright version bump, run `.venv/bin/python -m playwright install chromium`
   or the next `run` fails with "Executable doesn't exist".

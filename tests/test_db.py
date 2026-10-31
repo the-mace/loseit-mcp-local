@@ -1,4 +1,8 @@
 """Unit tests for the SQLite storage layer (db.py)."""
+import sqlite3
+
+import pytest
+
 import db
 
 
@@ -77,8 +81,6 @@ def test_upsert_daily_summary_notes_optional_key(tmp_db):
 
 def test_migrate_adds_notes_column_to_existing_db(tmp_path, monkeypatch):
     """DBs created before the notes column still gain it via init_db()."""
-    import sqlite3
-
     path = tmp_path / "legacy.db"
     monkeypatch.setattr(db, "DB_PATH", path)
     with sqlite3.connect(path) as conn:
@@ -116,8 +118,12 @@ def test_query_daily_summary_date_range_and_order(tmp_db):
     assert [r["date"] for r in rows] == ["2026-07-10", "2026-07-11"]
 
 
-def test_insert_food_log_entry(tmp_db):
-    db.insert_food_log_entry(_food())
+def _food_rows(date):
+    return [(r["meal"], r["name"], r["quantity"]) for r in db.query_food_log(date, date)]
+
+
+def test_replace_food_log_inserts(tmp_db):
+    db.replace_food_log("2026-07-10", [_food()])
     rows = db.query_food_log("2026-07-10", "2026-07-10")
     assert len(rows) == 1
     assert rows[0]["name"] == "Eggs"
@@ -125,38 +131,71 @@ def test_insert_food_log_entry(tmp_db):
     assert rows[0]["calories"] == 140.0
 
 
-def test_food_log_dedup_on_reinsert(tmp_db):
-    """Re-scraping the same day must not create duplicate food rows."""
-    entry = _food()
-    db.insert_food_log_entry(entry)
-    db.insert_food_log_entry(entry)
-    rows = db.query_food_log("2026-07-10", "2026-07-10")
-    assert len(rows) == 1
-
-
-def test_food_log_dedup_with_null_brand(tmp_db):
-    """brand is always NULL and must not defeat the UNIQUE constraint
-    (SQL treats NULL != NULL, so brand was deliberately left out of the
-    uniqueness key)."""
-    entry = _food(brand=None)
-    db.insert_food_log_entry(entry)
-    db.insert_food_log_entry(entry)
+def test_replace_food_log_rescrape_does_not_duplicate(tmp_db):
+    db.replace_food_log("2026-07-10", [_food()])
+    db.replace_food_log("2026-07-10", [_food()])
     assert len(db.query_food_log("2026-07-10", "2026-07-10")) == 1
 
 
-def test_food_log_allows_distinct_entries(tmp_db):
-    db.insert_food_log_entry(_food(name="Eggs", quantity=2.0))
-    db.insert_food_log_entry(_food(name="Eggs", quantity=1.0))  # different qty
-    db.insert_food_log_entry(_food(name="Toast", quantity=2.0))  # different name
-    db.insert_food_log_entry(_food(meal="Lunch", name="Eggs", quantity=2.0))  # different meal
+def test_replace_food_log_drops_edited_and_deleted_entries(tmp_db):
+    db.replace_food_log("2026-07-10", [_food(name="Eggs"), _food(name="Toast"), _food(meal="Lunch", name="Soup")])
+    db.replace_food_log("2026-07-10", [_food(name="Eggs", quantity=3.0), _food(meal="Lunch", name="Soup")])
+    assert _food_rows("2026-07-10") == [("Breakfast", "Eggs", 3.0), ("Lunch", "Soup", 2.0)]
+
+
+def test_replace_food_log_empty_day_and_other_days_untouched(tmp_db):
+    db.replace_food_log("2026-07-10", [_food()])
+    db.replace_food_log("2026-07-11", [_food(date="2026-07-11", name="Toast")])
+    db.replace_food_log("2026-07-10", [])
+    assert _food_rows("2026-07-10") == []
+    assert _food_rows("2026-07-11") == [("Breakfast", "Toast", 2.0)]
+
+
+def test_replace_food_log_keeps_identical_entries(tmp_db):
+    db.replace_food_log("2026-07-10", [_food(name="Banana"), _food(name="Banana")])
+    assert len(db.query_food_log("2026-07-10", "2026-07-10")) == 2
+
+
+def test_replace_food_log_failure_keeps_old_rows(tmp_db):
+    db.replace_food_log("2026-07-10", [_food()])
+    bad = _food(name="Toast")
+    del bad["calories"]
+    with pytest.raises(sqlite3.ProgrammingError):
+        db.replace_food_log("2026-07-10", [_food(name="Ham"), bad])
+    assert _food_rows("2026-07-10") == [("Breakfast", "Eggs", 2.0)]
+
+
+def test_migrate_drops_food_log_unique_constraint(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.db"
+    monkeypatch.setattr(db, "DB_PATH", path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """CREATE TABLE food_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, meal TEXT,
+                name TEXT, brand TEXT, quantity REAL, units TEXT, calories REAL,
+                protein_g REAL, carbs_g REAL, fat_g REAL,
+                fetched_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(date, meal, name, quantity, units))"""
+        )
+        conn.execute(
+            "INSERT INTO food_log (id, date, meal, name, quantity, units, calories)"
+            " VALUES (7, '2026-07-10', 'Breakfast', 'Eggs', 2, 'Each', 140)"
+        )
+    db.init_db()
     rows = db.query_food_log("2026-07-10", "2026-07-10")
-    assert len(rows) == 4
+    assert [(r["id"], r["name"], r["calories"]) for r in rows] == [(7, "Eggs", 140.0)]
+    db.replace_food_log("2026-07-10", [_food(), _food()])
+    assert len(db.query_food_log("2026-07-10", "2026-07-10")) == 2
+    with sqlite3.connect(path) as conn:
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'food_log'").fetchone()[0]
+        indexes = {r[1] for r in conn.execute("PRAGMA index_list(food_log)")}
+    assert "UNIQUE" not in sql.upper()
+    assert "food_log_date" in indexes
 
 
 def test_query_food_log_ordered_by_date_then_meal(tmp_db):
-    db.insert_food_log_entry(_food(date="2026-07-11", meal="Lunch", name="Salad"))
-    db.insert_food_log_entry(_food(date="2026-07-10", meal="Dinner", name="Steak"))
-    db.insert_food_log_entry(_food(date="2026-07-10", meal="Breakfast", name="Eggs"))
+    db.replace_food_log("2026-07-11", [_food(meal="Lunch", name="Salad")])
+    db.replace_food_log("2026-07-10", [_food(meal="Dinner", name="Steak"), _food(meal="Breakfast", name="Eggs")])
     rows = db.query_food_log("2026-07-10", "2026-07-11")
     assert [(r["date"], r["meal"]) for r in rows] == [
         ("2026-07-10", "Breakfast"),

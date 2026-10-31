@@ -5,6 +5,23 @@ from contextlib import contextmanager
 
 DB_PATH = Path.home() / ".loseit-data" / "loseit.db"
 
+_FOOD_LOG_TABLE = """
+CREATE TABLE IF NOT EXISTS food_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    meal TEXT,
+    name TEXT,
+    brand TEXT,
+    quantity REAL,
+    units TEXT,
+    calories REAL,
+    protein_g REAL,
+    carbs_g REAL,
+    fat_g REAL,
+    fetched_at TEXT DEFAULT (datetime('now'))
+);
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_summary (
     date TEXT PRIMARY KEY,
@@ -20,25 +37,8 @@ CREATE TABLE IF NOT EXISTS daily_summary (
     fetched_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS food_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,
-    meal TEXT,
-    name TEXT,
-    brand TEXT,
-    quantity REAL,
-    units TEXT,
-    calories REAL,
-    protein_g REAL,
-    carbs_g REAL,
-    fat_g REAL,
-    fetched_at TEXT DEFAULT (datetime('now')),
-    -- brand is deliberately excluded from this constraint: it's never
-    -- populated (always NULL, not exposed in the row DOM), and SQL
-    -- treats NULL != NULL for uniqueness purposes, so including it here
-    -- would silently defeat the dedup entirely on every re-scrape.
-    UNIQUE(date, meal, name, quantity, units)
-);
+{food_log}
+CREATE INDEX IF NOT EXISTS food_log_date ON food_log(date);
 
 CREATE TABLE IF NOT EXISTS weight_log (
     date TEXT PRIMARY KEY,
@@ -52,21 +52,39 @@ CREATE TABLE IF NOT EXISTS water_log (
     fluid_ounces REAL,
     fetched_at TEXT DEFAULT (datetime('now'))
 );
-"""
+""".replace("{food_log}", _FOOD_LOG_TABLE.strip())
+
+
+_FOOD_LOG_COLS = "id, date, meal, name, brand, quantity, units, calories, protein_g, carbs_g, fat_g, fetched_at"
 
 
 def _migrate(conn: sqlite3.Connection):
-    """Apply additive schema changes for DBs created before newer columns."""
+    """Apply schema changes for DBs created before newer columns."""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(daily_summary)")}
     if cols and "notes" not in cols:
         conn.execute("ALTER TABLE daily_summary ADD COLUMN notes TEXT")
+    # The old UNIQUE(date, meal, name, quantity, units) merged two identical
+    # entries in one meal into one row; days are now replaced whole instead.
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='food_log'"
+    ).fetchone()
+    if sql and "UNIQUE" in sql[0].upper():
+        conn.executescript(f"""
+            BEGIN;
+            ALTER TABLE food_log RENAME TO food_log_old;
+            {_FOOD_LOG_TABLE}
+            INSERT INTO food_log ({_FOOD_LOG_COLS}) SELECT {_FOOD_LOG_COLS} FROM food_log_old;
+            DROP TABLE food_log_old;
+            COMMIT;
+        """)
 
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
-        conn.executescript(SCHEMA)
+        # Before SCHEMA, so its food_log index lands on the rebuilt table.
         _migrate(conn)
+        conn.executescript(SCHEMA)
 
 
 @contextmanager
@@ -109,14 +127,16 @@ def upsert_daily_summary(row: dict):
         )
 
 
-def insert_food_log_entry(row: dict):
+def replace_food_log(date: str, rows: list[dict]):
+    """Make the stored food rows for `date` exactly `rows`, in one transaction."""
     with get_conn() as conn:
-        conn.execute(
-            """INSERT OR IGNORE INTO food_log
+        conn.execute("DELETE FROM food_log WHERE date = ?", (date,))
+        conn.executemany(
+            """INSERT INTO food_log
                (date, meal, name, brand, quantity, units, calories, protein_g, carbs_g, fat_g)
                VALUES (:date, :meal, :name, :brand, :quantity, :units, :calories, :protein_g, :carbs_g, :fat_g)
             """,
-            row,
+            [{**r, "date": date} for r in rows],
         )
 
 
