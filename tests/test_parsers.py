@@ -12,10 +12,23 @@ from scraper import _parse_number, _parse_quantity
         ("3/4 cup", (0.75, "cup")),
         ("1.5 oz", (1.5, "oz")),
         ("10 g", (10.0, "g")),
+        ("14 7/8 Fluid ounces", (14.875, "Fluid ounces")),
+        ("1 1/2 Servings", (1.5, "Servings")),
+        ("1\u00a01/2\u00a0Cups", (1.5, "Cups")),
+        ("½ Cup", (0.5, "Cup")),
+        ("1 ½ Cups", (1.5, "Cups")),
+        ("1½ Cups", (1.5, "Cups")),
+        ("2 ¾ Ounces", (2.75, "Ounces")),
+        ("2 1/2", (2.5, "")),
     ],
 )
 def test_parse_quantity_happy_paths(text, expected):
     assert _parse_quantity(text) == expected
+
+
+@pytest.mark.parametrize("text", ["abc Servings", "1/0 Cups", "x½ Cups"])
+def test_parse_quantity_non_numeric_amount_keeps_text(text):
+    assert _parse_quantity(text) == (None, text)
 
 
 def test_parse_quantity_missing_units_returns_none_qty():

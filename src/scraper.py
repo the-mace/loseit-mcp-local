@@ -41,6 +41,7 @@ import getpass
 import json
 import sys
 import time
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -266,18 +267,44 @@ def _goto_date(page, target: date):
         )
 
 
+def _parse_amount(token: str):
+    """'14' / '1.5' / '7/8' / '½' / '1½' -> float, else None."""
+    if token and unicodedata.category(token[-1]) == "No":
+        whole = token[:-1]
+        if whole and not whole.isdigit():
+            return None
+        return (int(whole) if whole else 0) + unicodedata.numeric(token[-1])
+    if "/" in token:
+        num, _, den = token.partition("/")
+        if not (num.isdigit() and den.isdigit()) or int(den) == 0:
+            return None
+        return int(num) / int(den)
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
+def _is_fraction(token: str) -> bool:
+    if len(token) == 1:
+        return unicodedata.category(token) == "No" and 0 < unicodedata.numeric(token) < 1
+    num, sep, den = token.partition("/")
+    return bool(sep) and num.isdigit() and den.isdigit() and int(den) != 0
+
+
 def _parse_quantity(text: str):
-    """'2  Servings' -> (2.0, 'Servings'); '1/2 Each' -> (0.5, 'Each')."""
-    parts = text.split(None, 1)
-    if len(parts) != 2:
+    """'2  Servings' -> (2.0, 'Servings'); '1/2 Each' -> (0.5, 'Each');
+    '14 7/8 Fluid ounces' -> (14.875, 'Fluid ounces'); '1 ½ Cups' -> (1.5, 'Cups')."""
+    tokens = text.split()
+    qty = _parse_amount(tokens[0]) if tokens else None
+    if qty is None or len(tokens) < 2:
         return None, text.strip()
-    qty_str, units = parts
-    if "/" in qty_str:
-        num, _, den = qty_str.partition("/")
-        qty = float(num) / float(den)
-    else:
-        qty = float(qty_str)
-    return qty, units.strip()
+    rest = tokens[1:]
+    # LoseIt renders mixed amounts as two tokens: whole number, then fraction.
+    if tokens[0].isdigit() and _is_fraction(rest[0]):
+        qty += _parse_amount(rest[0])
+        rest = rest[1:]
+    return qty, " ".join(rest)
 
 
 def _parse_number(text: str) -> float:
