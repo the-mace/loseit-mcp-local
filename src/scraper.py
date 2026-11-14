@@ -655,8 +655,8 @@ def fetch_weight(page, day: date, today: date | None = None) -> bool:
     widget on the dashboard.
 
     Returns False only when the widget can't be found or shows a different
-    day, so the caller can fail the run loudly. A day with no weigh-in, or
-    one that repeats the previous stored weight, returns True with no row.
+    day, so the caller can fail the run loudly. A day with no weigh-in
+    returns True with no row.
 
     Switching onto the Weight sub-tab resets its internal date-binding to
     "today", independent of whatever the main date header already shows
@@ -681,17 +681,6 @@ def fetch_weight(page, day: date, today: date | None = None) -> bool:
         print(f"No weight logged for {day.isoformat()}.")
         return True
     weight = float(found["value"])
-    prev = db.previous_weight(day.isoformat())
-    # On a day with no weigh-in (often a missed Wyze -> Health -> LoseIt
-    # sync) LoseIt shows the last one again. A real repeat to 0.1 lb is
-    # rare enough to drop along with them.
-    if prev is not None and prev["weight"] == weight:
-        db.delete_weight(day.isoformat(), weight)
-        print(
-            f"Weight for {day.isoformat()} repeats {prev['date']} ({weight:g} lb); "
-            "treating it as a missed sync and not storing it."
-        )
-        return True
     db.upsert_weight(day.isoformat(), weight, "lb")
     return True
 
